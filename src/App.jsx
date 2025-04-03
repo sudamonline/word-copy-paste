@@ -5,7 +5,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin } from "prosemirror-state"; // Plugin allows you to customize the editor's behavior
 import { DOMParser } from "prosemirror-model"; // DOMParser to transform pasted HTML into ProseMirror schema
 import useImageApi from "./image.api";
-import { setImageInfo } from "./setImageInfo";
+// import { setImageInfo } from "./setImageInfo";
 import "./App.css";
 import React from "react";
 
@@ -80,15 +80,17 @@ const App = () => {
       // Get the pre-signed URL from the backend to upload the image
       const uploadInfo = await generateUrl([{ file: file.name }]);
 
+      const formData = new FormData();
+      formData.append("file", file);
       // Format the upload payload and image URL using a utility function
-      const { payload, imageUrl } = setImageInfo(uploadInfo[0], file);
+      // const { payload, imageUrl } = setImageInfo(uploadInfo[0], file);
 
       // Upload the file to the S3 bucket using the generated payload
-      await uploadTos3(payload);
+      await uploadTos3(uploadInfo[0].presigned_url, formData);
 
-      console.log("upload info", imageUrl); // Debugging output of the image URL
+      console.log("upload info", uploadInfo[0].presigned_url); // Debugging output of the image URL
 
-      return imageUrl; // Return the uploaded image URL from the server response
+      return uploadInfo[0].file; // Return the uploaded image URL from the server response
     } catch (error) {
       console.error("Image upload failed:", error); // Log any errors during upload
       return null; // Return null if the upload fails
