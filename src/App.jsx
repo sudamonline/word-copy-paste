@@ -20,7 +20,7 @@ const debugImageData = (file) => {
       console.log("Data URL preview:", reader.result.substring(0, 100) + "...");
 
       // Create an image element to check dimensions
-      const img = new Image();
+      const img = new window.Image();
       img.onload = () => {
         console.log("Image dimensions:", img.width, "x", img.height);
         console.groupEnd();
