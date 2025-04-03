@@ -7,7 +7,7 @@ import { DOMParser } from "prosemirror-model"; // DOMParser to transform pasted 
 import useImageApi from "./image.api";
 // import { setImageInfo } from "./setImageInfo";
 import "./App.css";
-import React from "react";
+import React, { useState } from "react";
 
 const debugImageData = (file) => {
   return new Promise((resolve) => {
@@ -57,6 +57,7 @@ const editorStyles = `
 const App = () => {
   // Destructure custom hooks to get functions for generating URL and uploading images to S3
   const { generateUrl, uploadImage: uploadTos3 } = useImageApi();
+  const [isPasting, setIsPasting] = useState(false);
 
   // Add styles to the document
   React.useEffect(() => {
@@ -104,8 +105,9 @@ const App = () => {
       return [
         new Plugin({
           props: {
-            handlePaste(view, event) {
+            async handlePaste(view, event) {
               try {
+                setIsPasting(true);
                 console.log("Paste event triggered");
                 const clipboardData = event.clipboardData;
                 console.log("Clipboard data:", {
@@ -129,7 +131,11 @@ const App = () => {
                       `Found ${images.length} images in pasted content`
                     );
 
-                    images.forEach(async (img, index) => {
+                    // Create a map to store image replacements
+                    const imageReplacements = new Map();
+
+                    // Process all images first
+                    await Promise.all(Array.from(images).map(async (img, index) => {
                       try {
                         const src = img.src;
                         console.log(`Processing image ${index + 1}:`, src);
@@ -151,83 +157,70 @@ const App = () => {
                             if (file) {
                               try {
                                 const imageUrl = await uploadImage(file);
-                                console.log(
-                                  "Upload successful, URL:",
-                                  imageUrl
-                                );
-
                                 if (imageUrl) {
-                                  const transaction =
-                                    view.state.tr.replaceSelectionWith(
-                                      view.state.schema.nodes.image.create({
-                                        src: imageUrl,
-                                      })
-                                    );
-                                  view.dispatch(transaction);
-                                } else {
-                                  console.error(
-                                    "Upload completed but no URL returned"
-                                  );
+                                  imageReplacements.set(src, imageUrl);
+                                  console.log("Local image uploaded:", imageUrl);
                                 }
                               } catch (uploadError) {
-                                console.error(
-                                  "Error uploading image:",
-                                  uploadError
-                                );
+                                console.error("Error uploading image:", uploadError);
                               }
-                            } else {
-                              console.error(
-                                "File object could not be created from clipboard item"
-                              );
                             }
-                          } else {
-                            console.error("No file found in clipboard items");
                           }
-                        } else if (
-                          src.startsWith("data:image/") ||
-                          src.startsWith("http")
-                        ) {
-                          console.log(
-                            `Processing remote image: ${src.substring(
-                              0,
-                              100
-                            )}...`
-                          );
+                        } else if (src.startsWith("data:image/")) {
+                          console.log(`Processing base64 image ${index + 1}`);
+                          
+                          // Convert base64 to file
+                          const base64Data = src.split(',')[1];
+                          const mimeType = src.split(';')[0].split(':')[1];
+                          const byteCharacters = atob(base64Data);
+                          const byteArrays = [];
+                          
+                          for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+                            const slice = byteCharacters.slice(offset, offset + 1024);
+                            const byteNumbers = new Array(slice.length);
+                            for (let i = 0; i < slice.length; i++) {
+                              byteNumbers[i] = slice.charCodeAt(i);
+                            }
+                            const byteArray = new Uint8Array(byteNumbers);
+                            byteArrays.push(byteArray);
+                          }
+                          
+                          const blob = new Blob(byteArrays, { type: mimeType });
+                          const file = new File([blob], `pasted-image-${Date.now()}.${mimeType.split('/')[1]}`, { type: mimeType });
+                          
                           try {
-                            // const transaction =
-                            //   view.state.tr.replaceSelectionWith(
-                            //     view.state.schema.nodes.image.create({ src })
-                            //   );
-                            // view.dispatch(transaction);
-                            console.log("Remote image inserted successfully");
-                          } catch (remoteError) {
-                            console.error(
-                              "Error inserting remote image:",
-                              remoteError
-                            );
+                            const imageUrl = await uploadImage(file);
+                            if (imageUrl) {
+                              imageReplacements.set(src, imageUrl);
+                              console.log("Base64 image uploaded:", imageUrl);
+                            }
+                          } catch (uploadError) {
+                            console.error("Error uploading base64 image:", uploadError);
                           }
                         }
                       } catch (imgError) {
-                        console.error(
-                          `Error processing image ${index + 1}:`,
-                          imgError
-                        );
+                        console.error(`Error processing image ${index + 1}:`, imgError);
+                      }
+                    }));
+
+                    // Replace all image sources in the HTML
+                    images.forEach(img => {
+                      const newSrc = imageReplacements.get(img.src);
+                      if (newSrc) {
+                        img.src = newSrc;
                       }
                     });
 
+                    // Now insert the content with updated image URLs
                     try {
                       const fragment = DOMParser.fromSchema(
                         view.state.schema
                       ).parse(tempDiv);
-                      const transaction =
-                        view.state.tr.replaceSelectionWith(fragment);
+                      const transaction = view.state.tr.replaceSelectionWith(fragment);
                       view.dispatch(transaction);
-                      console.log("Content inserted successfully");
+                      console.log("Content inserted successfully with updated image URLs");
                     } catch (parseError) {
-                      console.error(
-                        "Error parsing and inserting content:",
-                        parseError
-                      );
+                      console.error("Error parsing and inserting content:", parseError);
                     }
 
                     event.preventDefault();
@@ -309,8 +302,10 @@ const App = () => {
                 }
               } catch (error) {
                 console.error("Error handling paste event:", error);
+              } finally {
+                setIsPasting(false);
               }
-              return false; // Return false if the paste event is not handled
+              return false;
             },
           },
         }),
@@ -339,13 +334,63 @@ const App = () => {
       <h3>TipTap Editor with Automatic Image Upload for file:// Images</h3>
       <div
         style={{
-          border: "1px solid #ccc", // Add a border around the editor
-          minHeight: "200px", // Minimum height for the editor
-          padding: "10px", // Padding inside the editor container
+          border: "1px solid #ccc",
+          minHeight: "200px",
+          padding: "10px",
+          position: "relative",
         }}
       >
-        <EditorContent editor={editor} /> {/* Render the TipTap editor */}
+        {isPasting && (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(255, 255, 255, 0.7)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+            }}
+          >
+            <div
+              style={{
+                padding: "20px",
+                backgroundColor: "white",
+                borderRadius: "8px",
+                boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "10px",
+              }}
+            >
+              <div
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  border: "4px solid #f3f3f3",
+                  borderTop: "4px solid #3498db",
+                  borderRadius: "50%",
+                  animation: "spin 1s linear infinite",
+                }}
+              />
+              <span>Processing content and uploading images...</span>
+            </div>
+          </div>
+        )}
+        <EditorContent editor={editor} />
       </div>
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}
+      </style>
     </div>
   );
 };
