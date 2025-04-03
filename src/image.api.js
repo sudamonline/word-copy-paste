@@ -1,4 +1,5 @@
 import axios from "./axios";
+import publicAxios from "axios";
 
 const useImageApi = () => {
   /**
@@ -16,12 +17,9 @@ const useImageApi = () => {
    * Upload Image
    * @param payload
    */
-  const uploadImage = async (payload) => {
-    console.log("https://insights-terminal.s3.amazonaws.com", "env");
-    return axios.post(
-      `${"https://insights-terminal.s3.amazonaws.com"}`,
-      payload
-    );
+  const uploadImage = async (url, payload) => {
+    console.log("url [hook]", url);
+    return publicAxios.post(url, payload);
   };
 
   return {

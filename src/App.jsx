@@ -86,9 +86,10 @@ const App = () => {
       // const { payload, imageUrl } = setImageInfo(uploadInfo[0], file);
 
       // Upload the file to the S3 bucket using the generated payload
+      console.log("uploadInfo", uploadInfo[0]);
       await uploadTos3(uploadInfo[0].presigned_url, formData);
 
-      console.log("upload info", uploadInfo[0].presigned_url); // Debugging output of the image URL
+      console.log("upload info", uploadInfo[0].file); // Debugging output of the image URL
 
       return uploadInfo[0].file; // Return the uploaded image URL from the server response
     } catch (error) {
