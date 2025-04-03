@@ -54,6 +54,100 @@ const editorStyles = `
   }
 `;
 
+// Helper function to convert base64 to file
+const base64ToFile = (base64String, mimeType) => {
+  const base64Data = base64String.split(',')[1];
+  const byteCharacters = atob(base64Data);
+  const byteArrays = [];
+  
+  for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+    const slice = byteCharacters.slice(offset, offset + 1024);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    byteArrays.push(byteArray);
+  }
+  
+  const blob = new Blob(byteArrays, { type: mimeType });
+  return new File([blob], `pasted-image-${Date.now()}.${mimeType.split('/')[1]}`, { type: mimeType });
+};
+
+// Function to process a single image
+const processImage = async (img, clipboardData, uploadImage) => {
+  const src = img.src;
+  console.log(`Processing image:`, src);
+
+  if (src.startsWith("file://")) {
+    const fileItem = Array.from(clipboardData.items).find(
+      (item) => item.kind === "file"
+    );
+
+    if (fileItem) {
+      const file = fileItem.getAsFile();
+      if (file) {
+        try {
+          const imageUrl = await uploadImage(file);
+          return { originalSrc: src, newSrc: imageUrl };
+        } catch (error) {
+          console.error("Error uploading local image:", error);
+        }
+      }
+    }
+  } else if (src.startsWith("data:image/")) {
+    const mimeType = src.split(';')[0].split(':')[1];
+    const file = base64ToFile(src, mimeType);
+    
+    try {
+      const imageUrl = await uploadImage(file);
+      return { originalSrc: src, newSrc: imageUrl };
+    } catch (error) {
+      console.error("Error uploading base64 image:", error);
+    }
+  }
+
+  return { originalSrc: src, newSrc: src };
+};
+
+// Function to process all images in HTML content
+const processImagesInHtml = async (html, clipboardData, uploadImage) => {
+  const tempDiv = document.createElement("div");
+  tempDiv.innerHTML = html;
+  const images = tempDiv.querySelectorAll("img");
+  
+  const imageReplacements = new Map();
+  
+  const results = await Promise.all(
+    Array.from(images).map(img => processImage(img, clipboardData, uploadImage))
+  );
+  
+  results.forEach(({ originalSrc, newSrc }) => {
+    if (newSrc) {
+      imageReplacements.set(originalSrc, newSrc);
+    }
+  });
+  
+  return { tempDiv, imageReplacements };
+};
+
+// Function to insert content into editor
+const insertContent = (view, tempDiv, imageReplacements) => {
+  // Update image sources
+  const images = tempDiv.querySelectorAll("img");
+  images.forEach(img => {
+    const newSrc = imageReplacements.get(img.src);
+    if (newSrc) {
+      img.src = newSrc;
+    }
+  });
+
+  // Insert content
+  const fragment = DOMParser.fromSchema(view.state.schema).parse(tempDiv);
+  const transaction = view.state.tr.replaceSelectionWith(fragment);
+  view.dispatch(transaction);
+};
+
 const App = () => {
   // Destructure custom hooks to get functions for generating URL and uploading images to S3
   const { generateUrl, uploadImage: uploadTos3 } = useImageApi();
@@ -110,119 +204,21 @@ const App = () => {
                 setIsPasting(true);
                 console.log("Paste event triggered");
                 const clipboardData = event.clipboardData;
-                console.log("Clipboard data:", {
-                  types: Array.from(clipboardData.types),
-                  items: Array.from(clipboardData.items).map((item) => ({
-                    kind: item.kind,
-                    type: item.type,
-                  })),
-                });
-
+                
                 if (clipboardData) {
                   const html = clipboardData.getData("text/html");
                   console.log("Pasted HTML content:", html);
 
                   if (html) {
-                    const tempDiv = document.createElement("div");
-                    tempDiv.innerHTML = html;
-
-                    const images = tempDiv.querySelectorAll("img");
-                    console.log(
-                      `Found ${images.length} images in pasted content`
+                    const { tempDiv, imageReplacements } = await processImagesInHtml(
+                      html,
+                      clipboardData,
+                      uploadImage
                     );
-
-                    // Create a map to store image replacements
-                    const imageReplacements = new Map();
-
-                    // Process all images first
-                    await Promise.all(Array.from(images).map(async (img, index) => {
-                      try {
-                        const src = img.src;
-                        console.log(`Processing image ${index + 1}:`, src);
-
-                        if (src.startsWith("file://")) {
-                          console.log(
-                            `Image ${index + 1} is a local file:`,
-                            src
-                          );
-
-                          const fileItem = Array.from(clipboardData.items).find(
-                            (item) => item.kind === "file"
-                          );
-
-                          if (fileItem) {
-                            const file = fileItem.getAsFile();
-                            console.log("Found file in clipboard:", file);
-
-                            if (file) {
-                              try {
-                                const imageUrl = await uploadImage(file);
-                                if (imageUrl) {
-                                  imageReplacements.set(src, imageUrl);
-                                  console.log("Local image uploaded:", imageUrl);
-                                }
-                              } catch (uploadError) {
-                                console.error("Error uploading image:", uploadError);
-                              }
-                            }
-                          }
-                        } else if (src.startsWith("data:image/")) {
-                          console.log(`Processing base64 image ${index + 1}`);
-                          
-                          // Convert base64 to file
-                          const base64Data = src.split(',')[1];
-                          const mimeType = src.split(';')[0].split(':')[1];
-                          const byteCharacters = atob(base64Data);
-                          const byteArrays = [];
-                          
-                          for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
-                            const slice = byteCharacters.slice(offset, offset + 1024);
-                            const byteNumbers = new Array(slice.length);
-                            for (let i = 0; i < slice.length; i++) {
-                              byteNumbers[i] = slice.charCodeAt(i);
-                            }
-                            const byteArray = new Uint8Array(byteNumbers);
-                            byteArrays.push(byteArray);
-                          }
-                          
-                          const blob = new Blob(byteArrays, { type: mimeType });
-                          const file = new File([blob], `pasted-image-${Date.now()}.${mimeType.split('/')[1]}`, { type: mimeType });
-                          
-                          try {
-                            const imageUrl = await uploadImage(file);
-                            if (imageUrl) {
-                              imageReplacements.set(src, imageUrl);
-                              console.log("Base64 image uploaded:", imageUrl);
-                            }
-                          } catch (uploadError) {
-                            console.error("Error uploading base64 image:", uploadError);
-                          }
-                        }
-                      } catch (imgError) {
-                        console.error(`Error processing image ${index + 1}:`, imgError);
-                      }
-                    }));
-
-                    // Replace all image sources in the HTML
-                    images.forEach(img => {
-                      const newSrc = imageReplacements.get(img.src);
-                      if (newSrc) {
-                        img.src = newSrc;
-                      }
-                    });
-
-                    // Now insert the content with updated image URLs
-                    try {
-                      const fragment = DOMParser.fromSchema(
-                        view.state.schema
-                      ).parse(tempDiv);
-                      const transaction = view.state.tr.replaceSelectionWith(fragment);
-                      view.dispatch(transaction);
-                      console.log("Content inserted successfully with updated image URLs");
-                    } catch (parseError) {
-                      console.error("Error parsing and inserting content:", parseError);
-                    }
-
+                    
+                    insertContent(view, tempDiv, imageReplacements);
+                    console.log("Content inserted successfully with updated image URLs");
+                    
                     event.preventDefault();
                     return true;
                   }
@@ -231,68 +227,21 @@ const App = () => {
                   for (let i = 0; i < clipboardData.items.length; i++) {
                     try {
                       const item = clipboardData.items[i];
-                      console.log(`Processing clipboard item ${i}:`, item.type);
-
                       if (item.type.includes("image")) {
                         const file = item.getAsFile();
                         if (file) {
-                          console.log("Processing image file:", file);
-                          const reader = new FileReader();
-
-                          reader.onerror = (error) => {
-                            console.error("FileReader error:", error);
-                          };
-
-                          reader.onload = async () => {
-                            try {
-                              const base64Image = reader.result;
-                              console.log("Image data loaded:", {
-                                size: file.size,
-                                type: file.type,
-                                name: file.name,
-                                base64Preview:
-                                  base64Image.substring(0, 100) + "...",
-                              });
-
-                              // First insert the base64 image for immediate preview
-                              const insertImage = (
-                                view,
-                                imageUrl,
-                                altText = ""
-                              ) => {
-                                const image =
-                                  view.state.schema.nodes.image.create({
-                                    src: imageUrl,
-                                    alt: altText,
-                                    title: altText,
-                                  });
-
-                                const transaction =
-                                  view.state.tr.replaceSelectionWith(image);
-                                view.dispatch(transaction);
-                              };
-
-                              // Then upload and replace with the actual URL
-                              const imageUrl = await uploadImage(file);
-                              if (imageUrl) {
-                                insertImage(
-                                  view,
-                                  imageUrl,
-                                  file.name || "Pasted image"
-                                );
-                                console.log(
-                                  "Image inserted into editor with URL:",
-                                  imageUrl
-                                );
-                              }
-                            } catch (error) {
-                              console.error("Error processing image:", error);
-                            }
-                          };
-
-                          // Read as data URL to get base64 representation
-                          reader.readAsDataURL(file);
-                          event.preventDefault(); // Prevent the default paste behavior
+                          const imageUrl = await uploadImage(file);
+                          if (imageUrl) {
+                            const imageNode = view.state.schema.nodes.image.create({
+                              src: imageUrl,
+                              alt: file.name || "Pasted image",
+                              title: file.name || "Pasted image"
+                            });
+                            
+                            const pos = view.state.selection.from;
+                            const transaction = view.state.tr.replaceWith(pos, pos, imageNode);
+                            view.dispatch(transaction);
+                          }
                         }
                       }
                     } catch (error) {
