@@ -191,11 +191,11 @@ const App = () => {
                             )}...`
                           );
                           try {
-                            // const transaction =
-                            //   view.state.tr.replaceSelectionWith(
-                            //     view.state.schema.nodes.image.create({ src })
-                            //   );
-                            // view.dispatch(transaction);
+                            const transaction =
+                              view.state.tr.replaceSelectionWith(
+                                view.state.schema.nodes.image.create({ src })
+                              );
+                            view.dispatch(transaction);
                             console.log("Remote image inserted successfully");
                           } catch (remoteError) {
                             console.error(
